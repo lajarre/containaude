@@ -9,6 +9,7 @@ set -euo pipefail
 # Modes:
 #   --resume <id>  Resume an existing session by UUID.
 #   --fresh        Start a new session (default).
+#   --headless     Print output instead of TUI (works with --fresh and --resume).
 #   --debug        Drop into a shell instead of launching Claude.
 #
 # Arguments:
@@ -162,10 +163,10 @@ fi
 
 # --- Run ---
 DOCKER_FLAGS="--rm"
-if [ "$HEADLESS" = true ]; then
-  DOCKER_FLAGS="$DOCKER_FLAGS -i"
-else
+if [ "$DEBUG" = true ] || [ "$HEADLESS" = false ]; then
   DOCKER_FLAGS="$DOCKER_FLAGS -it"
+else
+  DOCKER_FLAGS="$DOCKER_FLAGS -i"
 fi
 
 docker run $DOCKER_FLAGS \
