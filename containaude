@@ -8,8 +8,7 @@ set -euo pipefail
 #
 # Modes:
 #   --resume <id>  Resume an existing session by UUID.
-#   --fresh        Start a new session (default). If a .agent/HANDOFF.*.md
-#                  file exists, the agent is told to read it for context.
+#   --fresh        Start a new session (default).
 #   --debug        Drop into a shell instead of launching Claude.
 #
 # Arguments:
@@ -144,15 +143,7 @@ elif [ "$MODE" = "resume" ]; then
 else
   # Fresh: build a context-aware initial message
   if [ -z "$MESSAGE" ]; then
-    HANDOFF_HINT=""
-    LATEST_HANDOFF="$(ls -t "$PROJECT_PATH"/.agent/HANDOFF.*.md 2>/dev/null | head -1)"
-    if [ -n "$LATEST_HANDOFF" ]; then
-      HANDOFF_BASENAME="$(basename "$LATEST_HANDOFF")"
-      HANDOFF_HINT="
-
-A handoff from a previous session is available at .agent/${HANDOFF_BASENAME} — read it first to understand the current state and what's left to do."
-    fi
-    CLAUDE_MESSAGE="${ENV_PREAMBLE}${HANDOFF_HINT}"
+    CLAUDE_MESSAGE="${ENV_PREAMBLE}"
   else
     CLAUDE_MESSAGE="${ENV_PREAMBLE}
 

@@ -19,20 +19,20 @@ docker build -t containaude .
 ## Usage
 
 ```sh
-# Fresh session — auto-detects .agent/HANDOFF.*.md for context
-./containaude ~/workspace/myproject
+# Fresh session
+./containaude /path/to/project
 
 # Fresh session with a specific task
-./containaude ~/workspace/myproject "Fix the failing tests"
+./containaude /path/to/project "Fix the failing tests"
 
 # Resume an existing session
-./containaude --resume <session-id> ~/workspace/myproject
+./containaude --resume <session-id> /path/to/project
 
 # Headless mode (print output, no TUI)
-./containaude --headless ~/workspace/myproject "Summarize the codebase"
+./containaude --headless /path/to/project "Summarize the codebase"
 
 # Debug — drop into a shell inside the container
-./containaude --debug ~/workspace/myproject
+./containaude --debug /path/to/project
 ```
 
 Find session IDs with `claude --resume` on the host.
@@ -46,7 +46,7 @@ Find session IDs with `claude --resume` on the host.
 4. Mounts the project at its **original macOS path** inside the Linux container —
    Claude derives the session storage key from the cwd, so paths must match
 5. In fresh mode, injects an environment preamble telling the agent it's in
-   Linux (not macOS) and points it to the latest handoff file if one exists
+   Linux (not macOS)
 
 ## Security model
 
@@ -66,18 +66,6 @@ Find session IDs with `claude --resume` on the host.
   after the run.
 - The base image is `node:22` — no Python, Go, or Rust. If your project
   needs them, extend the Dockerfile.
-
-## Recommended workflow
-
-1. Work on your project normally with Claude Code
-2. Run `/handoff` at the end of a session (writes `.agent/HANDOFF.<id>.md`)
-3. Launch a sandboxed fresh session:
-   ```sh
-   ./containaude ~/workspace/myproject "Continue from the handoff"
-   ```
-4. The container agent reads the handoff, knows the environment is Linux,
-   and picks up where you left off
-5. Session history persists back to the host
 
 ## License
 
