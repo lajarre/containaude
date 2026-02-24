@@ -1,0 +1,185 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# claude-sandbox-run — Run Claude Code inside a Docker sandbox.
+#
+# Usage:
+#   claude-sandbox-run.sh [options] <project-path> [message]
+#
+# Modes:
+#   --resume <id>  Resume an existing session by UUID.
+#   --fresh        Start a new session (default). If a .agent/HANDOFF.*.md
+#                  file exists, the agent is told to read it for context.
+#   --debug        Drop into a shell instead of launching Claude.
+#
+# Arguments:
+#   project-path   Path to the project directory.
+#   message        Optional message sent to the session.
+#
+# What it does:
+#   - Extracts Claude OAuth credentials from macOS Keychain (never on disk)
+#   - Copies ~/.claude (skills, settings) read-only into the container
+#   - Mounts the session directory read-write so sessions persist to host
+#   - Mounts the project at its original macOS path (Claude derives the
+#     session storage key from cwd — paths must match)
+#   - Only the project dir and session data are visible — no ~/.ssh, etc.
+#
+# Security caveats:
+#   - Credentials are briefly visible via `docker inspect` on the running
+#     container (env var). Acceptable for local single-user use; do NOT
+#     use on shared machines or in CI without switching to Docker secrets.
+#   - The project directory is mounted read-write. The agent can modify
+#     your source code. Use git to review changes after the run.
+#
+# Prerequisites:
+#   docker build -t claude-sandbox -f ~/workspace/aidev/claude-sandbox/Dockerfile.claude-sandbox ~/workspace/aidev/claude-sandbox
+
+# --- Parse flags ---
+MODE="fresh"
+DEBUG=false
+HEADLESS=false
+SESSION_ID=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --resume)
+      MODE="resume"
+      SESSION_ID="${2:?--resume requires a session ID}"
+      if [[ ! "$SESSION_ID" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+        echo "Error: Invalid session ID format." >&2
+        exit 1
+      fi
+      shift 2
+      ;;
+    --fresh)
+      MODE="fresh"
+      shift
+      ;;
+    --headless)
+      HEADLESS=true
+      shift
+      ;;
+    --debug)
+      DEBUG=true
+      shift
+      ;;
+    -*)
+      echo "Unknown flag: $1" >&2
+      exit 1
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
+
+PROJECT_PATH="${1:?Usage: $0 [--resume <id> | --fresh] [--debug] <project-path> [message]}"
+MESSAGE="${2:-}"
+shift; shift 2>/dev/null || true
+
+# Resolve to absolute path
+PROJECT_PATH="$(cd "$PROJECT_PATH" && pwd)"
+
+# Compute the path-encoded project key (Claude's convention: / -> -)
+PROJECT_KEY="$(echo "$PROJECT_PATH" | tr '/' '-')"
+
+# Check image exists
+if ! docker image inspect claude-sandbox >/dev/null 2>&1; then
+  echo "Error: claude-sandbox image not found. Build it first:" >&2
+  echo "  docker build -t claude-sandbox -f ~/workspace/aidev/claude-sandbox/Dockerfile.claude-sandbox ~/workspace/aidev/claude-sandbox" >&2
+  exit 1
+fi
+
+# Extract credentials from macOS Keychain (never touches disk)
+CREDS="$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null)" || {
+  echo "Error: Could not extract Claude credentials from Keychain." >&2
+  echo "Make sure you're logged in to Claude Code on this machine." >&2
+  exit 1
+}
+
+# Ensure the session directory exists on host (for r/w mount)
+mkdir -p "$HOME/.claude/projects/$PROJECT_KEY"
+
+echo "Note: credentials are visible via 'docker inspect' while the container is running." >&2
+echo "      Project at $PROJECT_PATH is mounted read-write. Review changes with git after." >&2
+echo "      Mode: $MODE $([ "$DEBUG" = true ] && echo '(debug)')" >&2
+echo "" >&2
+
+# --- Environment preamble injected into fresh sessions ---
+ENV_PREAMBLE="You are running inside a Linux Docker container (not macOS).
+Environment: Node $(docker run --rm --entrypoint node claude-sandbox --version 2>/dev/null || echo '22') via system install. No mise, no Homebrew, no macOS tools.
+The project is mounted at its original macOS path for session compatibility.
+Only the project directory is accessible — no ~/.ssh, ~/Documents, or other host files."
+
+# --- Build container command ---
+SETUP='
+  cp -r /host-claude/. /root/.claude/ 2>/dev/null || true
+  cp /host-claude.json /root/.claude.json 2>/dev/null || true
+  printf "%s" "$CLAUDE_CREDS" > /root/.claude/.credentials.json
+  unset CLAUDE_CREDS
+'
+
+if [ "$DEBUG" = true ]; then
+  CONTAINER_CMD="${SETUP}
+    echo \"=== Debug shell (cwd: \$(pwd)) ===\"
+    echo \"\"
+    echo \"  claude --resume              # session picker\"
+    [ -n \"\$CLAUDE_SESSION_ID\" ] && echo \"  claude --resume \$CLAUDE_SESSION_ID\"
+    echo \"  claude                       # new session\"
+    echo \"\"
+    exec sh
+  "
+elif [ "$MODE" = "resume" ]; then
+  # Resume: pass message or default
+  RESUME_MSG="${MESSAGE:-Continue.}"
+  CONTAINER_CMD="${SETUP}
+    exec claude --resume \"\$CLAUDE_SESSION_ID\" \"\$CLAUDE_MESSAGE\"
+  "
+else
+  # Fresh: build a context-aware initial message
+  if [ -z "$MESSAGE" ]; then
+    # Check for handoff files in the project
+    HANDOFF_HINT=""
+    LATEST_HANDOFF="$(ls -t "$PROJECT_PATH"/.agent/HANDOFF.*.md 2>/dev/null | head -1)"
+    if [ -n "$LATEST_HANDOFF" ]; then
+      HANDOFF_BASENAME="$(basename "$LATEST_HANDOFF")"
+      HANDOFF_HINT="
+
+A handoff from a previous session is available at .agent/${HANDOFF_BASENAME} — read it first to understand the current state and what's left to do."
+    fi
+    FRESH_MSG="${ENV_PREAMBLE}${HANDOFF_HINT}"
+  else
+    FRESH_MSG="${ENV_PREAMBLE}
+
+${MESSAGE}"
+  fi
+  if [ "$HEADLESS" = true ]; then
+    CONTAINER_CMD="${SETUP}
+      exec claude --print --verbose \"\$CLAUDE_MESSAGE\"
+    "
+  else
+    CONTAINER_CMD="${SETUP}
+      exec claude \"\$CLAUDE_MESSAGE\"
+    "
+  fi
+fi
+
+# --- Run ---
+DOCKER_FLAGS="--rm"
+if [ "$HEADLESS" = true ]; then
+  DOCKER_FLAGS="$DOCKER_FLAGS -i"
+else
+  DOCKER_FLAGS="$DOCKER_FLAGS -it"
+fi
+
+docker run $DOCKER_FLAGS \
+  --entrypoint sh \
+  -e CLAUDE_CREDS="$CREDS" \
+  -e CLAUDE_SESSION_ID="$SESSION_ID" \
+  -e CLAUDE_MESSAGE="${RESUME_MSG:-$FRESH_MSG}" \
+  -v "$HOME/.claude:/host-claude:ro" \
+  -v "$HOME/.claude.json:/host-claude.json:ro" \
+  -v "$HOME/.claude/projects/$PROJECT_KEY:/root/.claude/projects/$PROJECT_KEY" \
+  -v "$PROJECT_PATH:$PROJECT_PATH" \
+  -w "$PROJECT_PATH" \
+  claude-sandbox -c "$CONTAINER_CMD"
