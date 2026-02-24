@@ -1,33 +1,38 @@
-# claude-sandbox
+# containaude
 
 Run Claude Code inside a Docker container with filesystem isolation.
 The agent has network access and can modify your project files, but cannot
 reach `~/.ssh`, `~/Documents`, or any other host data.
 
+## Requirements
+
+- Docker (or OrbStack)
+- macOS (credentials are extracted from Keychain)
+- Logged-in `claude` CLI (`claude login`)
+
 ## Setup
 
 ```sh
-# One-time: build the image
-docker build -t claude-sandbox -f Dockerfile.claude-sandbox .
+docker build -t containaude .
 ```
-
-Requires Docker (or OrbStack) and a working `claude` login on macOS
-(credentials are extracted from the Keychain at runtime).
 
 ## Usage
 
 ```sh
-# Fresh session (default) — auto-detects .agent/HANDOFF.*.md for context
-./claude-sandbox-run.sh ~/workspace/myproject
+# Fresh session — auto-detects .agent/HANDOFF.*.md for context
+./containaude ~/workspace/myproject
 
 # Fresh session with a specific task
-./claude-sandbox-run.sh ~/workspace/myproject "Fix the failing tests"
+./containaude ~/workspace/myproject "Fix the failing tests"
 
 # Resume an existing session
-./claude-sandbox-run.sh --resume <session-id> ~/workspace/myproject
+./containaude --resume <session-id> ~/workspace/myproject
+
+# Headless mode (print output, no TUI)
+./containaude --headless ~/workspace/myproject "Summarize the codebase"
 
 # Debug — drop into a shell inside the container
-./claude-sandbox-run.sh --debug ~/workspace/myproject
+./containaude --debug ~/workspace/myproject
 ```
 
 Find session IDs with `claude --resume` on the host.
@@ -59,19 +64,21 @@ Find session IDs with `claude --resume` on the host.
   or CI without switching to Docker secrets.
 - The project directory is mounted read-write. Review changes with `git diff`
   after the run.
+- The base image is `node:22` — no Python, Go, or Rust. If your project
+  needs them, extend the Dockerfile.
 
 ## Recommended workflow
 
-1. Work on your project normally in macOS with Claude Code
+1. Work on your project normally with Claude Code
 2. Run `/handoff` at the end of a session (writes `.agent/HANDOFF.<id>.md`)
 3. Launch a sandboxed fresh session:
    ```sh
-   ./claude-sandbox-run.sh ~/workspace/myproject "Continue from the handoff"
+   ./containaude ~/workspace/myproject "Continue from the handoff"
    ```
 4. The container agent reads the handoff, knows the environment is Linux,
    and picks up where you left off
 5. Session history persists back to the host
 
-Resuming (`--resume`) also works but the agent may be confused by
-environment differences (it remembers macOS/mise but is now in bare Linux).
-Fresh mode with a handoff avoids this.
+## License
+
+MIT

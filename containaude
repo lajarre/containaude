@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# claude-sandbox-run — Run Claude Code inside a Docker sandbox.
+# containaude — Run Claude Code inside a Docker sandbox.
 #
 # Usage:
-#   claude-sandbox-run.sh [options] <project-path> [message]
+#   containaude [options] <project-path> [message]
 #
 # Modes:
 #   --resume <id>  Resume an existing session by UUID.
@@ -32,7 +32,7 @@ set -euo pipefail
 #     your source code. Use git to review changes after the run.
 #
 # Prerequisites:
-#   docker build -t claude-sandbox -f ~/workspace/aidev/claude-sandbox/Dockerfile.claude-sandbox ~/workspace/aidev/claude-sandbox
+#   docker build -t containaude .
 
 # --- Parse flags ---
 MODE="fresh"
@@ -84,9 +84,9 @@ PROJECT_PATH="$(cd "$PROJECT_PATH" && pwd)"
 PROJECT_KEY="$(echo "$PROJECT_PATH" | tr '/' '-')"
 
 # Check image exists
-if ! docker image inspect claude-sandbox >/dev/null 2>&1; then
-  echo "Error: claude-sandbox image not found. Build it first:" >&2
-  echo "  docker build -t claude-sandbox -f ~/workspace/aidev/claude-sandbox/Dockerfile.claude-sandbox ~/workspace/aidev/claude-sandbox" >&2
+if ! docker image inspect containaude >/dev/null 2>&1; then
+  echo "Error: containaude image not found. Build it first:" >&2
+  echo "  docker build -t containaude ." >&2
   exit 1
 fi
 
@@ -107,7 +107,7 @@ echo "" >&2
 
 # --- Environment preamble injected into fresh sessions ---
 ENV_PREAMBLE="You are running inside a Linux Docker container (not macOS).
-Environment: Node $(docker run --rm --entrypoint node claude-sandbox --version 2>/dev/null || echo '22') via system install. No mise, no Homebrew, no macOS tools.
+Environment: Node $(docker run --rm --entrypoint node containaude --version 2>/dev/null || echo '22') via system install. No mise, no Homebrew, no macOS tools.
 The project is mounted at its original macOS path for session compatibility.
 Only the project directory is accessible — no ~/.ssh, ~/Documents, or other host files."
 
@@ -182,4 +182,4 @@ docker run $DOCKER_FLAGS \
   -v "$HOME/.claude/projects/$PROJECT_KEY:/root/.claude/projects/$PROJECT_KEY" \
   -v "$PROJECT_PATH:$PROJECT_PATH" \
   -w "$PROJECT_PATH" \
-  claude-sandbox -c "$CONTAINER_CMD"
+  containaude -c "$CONTAINER_CMD"
