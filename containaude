@@ -75,7 +75,6 @@ done
 
 PROJECT_PATH="${1:?Usage: $0 [--resume <id> | --fresh] [--debug] <project-path> [message]}"
 MESSAGE="${2:-}"
-shift; shift 2>/dev/null || true
 
 # Resolve to absolute path
 PROJECT_PATH="$(cd "$PROJECT_PATH" && pwd)"
@@ -107,7 +106,7 @@ echo "" >&2
 
 # --- Environment preamble injected into fresh sessions ---
 ENV_PREAMBLE="You are running inside a Linux Docker container (not macOS).
-Environment: Node $(docker run --rm --entrypoint node containaude --version 2>/dev/null || echo '22') via system install. No mise, no Homebrew, no macOS tools.
+Environment: Node 22 via system install. No mise, no Homebrew, no macOS tools.
 The project is mounted at its original macOS path for session compatibility.
 Only the project directory is accessible — no ~/.ssh, ~/Documents, or other host files."
 
@@ -118,6 +117,8 @@ SETUP='
   printf "%s" "$CLAUDE_CREDS" > /root/.claude/.credentials.json
   unset CLAUDE_CREDS
 '
+
+CLAUDE_MESSAGE=""
 
 if [ "$DEBUG" = true ]; then
   CONTAINER_CMD="${SETUP}
@@ -130,15 +131,19 @@ if [ "$DEBUG" = true ]; then
     exec sh
   "
 elif [ "$MODE" = "resume" ]; then
-  # Resume: pass message or default
-  RESUME_MSG="${MESSAGE:-Continue.}"
-  CONTAINER_CMD="${SETUP}
-    exec claude --resume \"\$CLAUDE_SESSION_ID\" \"\$CLAUDE_MESSAGE\"
-  "
+  CLAUDE_MESSAGE="${MESSAGE:-Continue.}"
+  if [ "$HEADLESS" = true ]; then
+    CONTAINER_CMD="${SETUP}
+      exec claude --resume \"\$CLAUDE_SESSION_ID\" --print --verbose \"\$CLAUDE_MESSAGE\"
+    "
+  else
+    CONTAINER_CMD="${SETUP}
+      exec claude --resume \"\$CLAUDE_SESSION_ID\" \"\$CLAUDE_MESSAGE\"
+    "
+  fi
 else
   # Fresh: build a context-aware initial message
   if [ -z "$MESSAGE" ]; then
-    # Check for handoff files in the project
     HANDOFF_HINT=""
     LATEST_HANDOFF="$(ls -t "$PROJECT_PATH"/.agent/HANDOFF.*.md 2>/dev/null | head -1)"
     if [ -n "$LATEST_HANDOFF" ]; then
@@ -147,9 +152,9 @@ else
 
 A handoff from a previous session is available at .agent/${HANDOFF_BASENAME} — read it first to understand the current state and what's left to do."
     fi
-    FRESH_MSG="${ENV_PREAMBLE}${HANDOFF_HINT}"
+    CLAUDE_MESSAGE="${ENV_PREAMBLE}${HANDOFF_HINT}"
   else
-    FRESH_MSG="${ENV_PREAMBLE}
+    CLAUDE_MESSAGE="${ENV_PREAMBLE}
 
 ${MESSAGE}"
   fi
@@ -176,7 +181,7 @@ docker run $DOCKER_FLAGS \
   --entrypoint sh \
   -e CLAUDE_CREDS="$CREDS" \
   -e CLAUDE_SESSION_ID="$SESSION_ID" \
-  -e CLAUDE_MESSAGE="${RESUME_MSG:-$FRESH_MSG}" \
+  -e CLAUDE_MESSAGE="$CLAUDE_MESSAGE" \
   -v "$HOME/.claude:/host-claude:ro" \
   -v "$HOME/.claude.json:/host-claude.json:ro" \
   -v "$HOME/.claude/projects/$PROJECT_KEY:/root/.claude/projects/$PROJECT_KEY" \
