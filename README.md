@@ -33,14 +33,34 @@ docker build -t containaude .
 
 # Debug — drop into a shell inside the container
 ./containaude --debug /path/to/project
+
+# Help
+./containaude --help
 ```
 
 Find session IDs with `claude --resume` on the host.
+
+## Testing
+
+```sh
+# Static checks
+./script/test-lint.sh
+
+# Mocked smoke tests (no real Docker/Keychain required)
+./script/test-smoke.sh
+
+# Run everything (integration is skipped by default)
+./script/test-all.sh
+
+# Real end-to-end check (opt-in)
+CONTAINAUDE_RUN_INTEGRATION=1 ./script/test-integration.sh /path/to/project
+```
 
 ## How it works
 
 1. Extracts OAuth credentials from macOS Keychain (never written to disk)
 2. Copies `~/.claude` (skills, settings, sessions) read-only into the container
+   and mounts `~/.claude.json` when present
 3. Mounts the project's session directory (`~/.claude/projects/<key>/`) read-write
    so sessions persist to the host
 4. Mounts the project at its **original macOS path** inside the Linux container —

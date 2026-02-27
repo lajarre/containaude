@@ -34,6 +34,20 @@ set -euo pipefail
 # Prerequisites:
 #   docker build -t containaude .
 
+usage() {
+  cat <<'EOF'
+Usage:
+  containaude [options] <project-path> [message]
+
+Options:
+  --fresh                Start a new session (default)
+  --resume <session-id>  Resume a specific session
+  --headless             Print output instead of TUI
+  --debug                Open a shell in the container
+  -h, --help             Show this help
+EOF
+}
+
 # --- Parse flags ---
 MODE="fresh"
 DEBUG=false
@@ -44,7 +58,12 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --resume)
       MODE="resume"
-      SESSION_ID="${2:?--resume requires a session ID}"
+      if [[ $# -lt 2 ]]; then
+        echo "Error: --resume requires a session ID." >&2
+        usage >&2
+        exit 1
+      fi
+      SESSION_ID="$2"
       if [[ ! "$SESSION_ID" =~ ^[a-zA-Z0-9_-]+$ ]]; then
         echo "Error: Invalid session ID format." >&2
         exit 1
@@ -63,8 +82,17 @@ while [[ $# -gt 0 ]]; do
       DEBUG=true
       shift
       ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --)
+      shift
+      break
+      ;;
     -*)
       echo "Unknown flag: $1" >&2
+      usage >&2
       exit 1
       ;;
     *)
@@ -73,14 +101,43 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-PROJECT_PATH="${1:?Usage: $0 [--resume <id> | --fresh] [--debug] <project-path> [message]}"
+if [ $# -lt 1 ]; then
+  usage >&2
+  exit 1
+fi
+
+if [ $# -gt 2 ]; then
+  echo "Error: too many positional arguments." >&2
+  usage >&2
+  exit 1
+fi
+
+PROJECT_PATH="$1"
 MESSAGE="${2:-}"
 
 # Resolve to absolute path
-PROJECT_PATH="$(cd "$PROJECT_PATH" && pwd)"
+if ! PROJECT_PATH="$(cd "$PROJECT_PATH" 2>/dev/null && pwd)"; then
+  echo "Error: project path does not exist or is not accessible: $PROJECT_PATH" >&2
+  exit 1
+fi
 
 # Compute the path-encoded project key (Claude's convention: / -> -)
-PROJECT_KEY="$(echo "$PROJECT_PATH" | tr '/' '-')"
+PROJECT_KEY="$(printf '%s' "$PROJECT_PATH" | tr '/' '-')"
+
+if ! command -v docker >/dev/null 2>&1; then
+  echo "Error: docker not found in PATH." >&2
+  exit 1
+fi
+
+if ! command -v security >/dev/null 2>&1; then
+  echo "Error: macOS security CLI not found. containaude currently supports macOS host auth only." >&2
+  exit 1
+fi
+
+if [ ! -d "$HOME/.claude" ]; then
+  echo "Error: ~/.claude not found. Run 'claude login' first on the host." >&2
+  exit 1
+fi
 
 # Check image exists
 if ! docker image inspect containaude >/dev/null 2>&1; then
@@ -95,6 +152,11 @@ CREDS="$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/n
   echo "Make sure you're logged in to Claude Code on this machine." >&2
   exit 1
 }
+if [ -z "$CREDS" ]; then
+  echo "Error: extracted Claude credentials are empty." >&2
+  echo "Run 'claude login' and try again." >&2
+  exit 1
+fi
 
 # Ensure the session directory exists on host (for r/w mount)
 mkdir -p "$HOME/.claude/projects/$PROJECT_KEY"
@@ -111,6 +173,7 @@ The project is mounted at its original macOS path for session compatibility.
 Only the project directory is accessible — no ~/.ssh, ~/Documents, or other host files."
 
 # --- Build container command ---
+# shellcheck disable=SC2016
 SETUP='
   cp -r /host-claude/. /root/.claude/ 2>/dev/null || true
   cp /host-claude.json /root/.claude.json 2>/dev/null || true
@@ -162,21 +225,34 @@ ${MESSAGE}"
 fi
 
 # --- Run ---
-DOCKER_FLAGS="--rm"
+DOCKER_FLAGS=(--rm)
 if [ "$DEBUG" = true ] || [ "$HEADLESS" = false ]; then
-  DOCKER_FLAGS="$DOCKER_FLAGS -it"
+  DOCKER_FLAGS+=(-it)
 else
-  DOCKER_FLAGS="$DOCKER_FLAGS -i"
+  DOCKER_FLAGS+=(-i)
 fi
 
-docker run $DOCKER_FLAGS \
-  --entrypoint sh \
-  -e CLAUDE_CREDS="$CREDS" \
-  -e CLAUDE_SESSION_ID="$SESSION_ID" \
-  -e CLAUDE_MESSAGE="$CLAUDE_MESSAGE" \
-  -v "$HOME/.claude:/host-claude:ro" \
-  -v "$HOME/.claude.json:/host-claude.json:ro" \
-  -v "$HOME/.claude/projects/$PROJECT_KEY:/root/.claude/projects/$PROJECT_KEY" \
-  -v "$PROJECT_PATH:$PROJECT_PATH" \
-  -w "$PROJECT_PATH" \
-  containaude -c "$CONTAINER_CMD"
+DOCKER_ARGS=(
+  "${DOCKER_FLAGS[@]}"
+  --entrypoint sh
+  -e "CLAUDE_CREDS=$CREDS"
+  -e "CLAUDE_SESSION_ID=$SESSION_ID"
+  -e "CLAUDE_MESSAGE=$CLAUDE_MESSAGE"
+  -v "$HOME/.claude:/host-claude:ro"
+)
+
+if [ -f "$HOME/.claude.json" ]; then
+  DOCKER_ARGS+=( -v "$HOME/.claude.json:/host-claude.json:ro" )
+else
+  echo "Note: ~/.claude.json not found; continuing without host config file mount." >&2
+fi
+
+DOCKER_ARGS+=(
+  -v "$HOME/.claude/projects/$PROJECT_KEY:/root/.claude/projects/$PROJECT_KEY"
+  -v "$PROJECT_PATH:$PROJECT_PATH"
+  -w "$PROJECT_PATH"
+  containaude
+  -c "$CONTAINER_CMD"
+)
+
+docker run "${DOCKER_ARGS[@]}"
